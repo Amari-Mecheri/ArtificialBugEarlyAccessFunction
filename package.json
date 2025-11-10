@@ -1,17 +1,15 @@
 {
-  "bindings": [
-    {
-      "authLevel": "anonymous",
-      "type": "httpTrigger",
-      "direction": "in",
-      "name": "req",
-      "methods": ["post", "options"],
-      "route": "HttpTrigger1"
-    },
-    {
-      "type": "http",
-      "direction": "out",
-      "name": "res"
-    }
-  ]
+  "name": "waitlist-function",
+  "version": "1.0.0",
+  "description": "Azure Function for ArtificialBug waitlist",
+  "scripts": {
+    "start": "func start",
+    "test": "echo \"No tests yet\""
+  },
+  "dependencies": {
+    "mssql": "^10.0.2"
+  },
+  "devDependencies": {
+    "@azure/functions": "^4.0.0"
+  }
 }
