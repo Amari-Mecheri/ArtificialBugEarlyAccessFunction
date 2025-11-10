@@ -1,10 +1,9 @@
-
 const sql = require('mssql');
 
 const config = {
     user: process.env.SQL_USER,
     password: process.env.SQL_PASSWORD,
-    server: process.env.SQL_SERVER, // ex: yourserver.database.windows.net
+    server: process.env.SQL_SERVER,
     database: process.env.SQL_DATABASE,
     options: {
         encrypt: true,
@@ -13,22 +12,26 @@ const config = {
 };
 
 module.exports = async function (context, req) {
-    // CORS headers
+    // CORS headers - IMPORTANT!
     const headers = {
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin': '*', // En production, remplacer * par votre domaine
         'Access-Control-Allow-Methods': 'POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type',
         'Content-Type': 'application/json'
     };
 
-    // Handle preflight
+    // Handle OPTIONS preflight request
     if (req.method === 'OPTIONS') {
         context.res = {
             status: 200,
-            headers: headers
+            headers: headers,
+            body: null
         };
         return;
     }
+
+    // Log pour debug
+    context.log('Request received:', req.method, req.body);
 
     try {
         const email = req.body?.email;
@@ -38,13 +41,18 @@ module.exports = async function (context, req) {
             context.res = {
                 status: 400,
                 headers: headers,
-                body: { success: false, message: 'Invalid email address' }
+                body: { 
+                    success: false, 
+                    message: 'Invalid email address' 
+                }
             };
             return;
         }
 
         // Connect to database
+        context.log('Connecting to database...');
         await sql.connect(config);
+        context.log('Database connected');
 
         // Check if email already exists
         const checkResult = await sql.query`
@@ -52,6 +60,7 @@ module.exports = async function (context, req) {
         `;
 
         if (checkResult.recordset[0].count > 0) {
+            context.log('Email already exists:', email);
             context.res = {
                 status: 200,
                 headers: headers,
@@ -64,6 +73,7 @@ module.exports = async function (context, req) {
         }
 
         // Insert new email
+        context.log('Inserting new email:', email);
         await sql.query`
             INSERT INTO Waitlist (email, created_at, ip_address, user_agent)
             VALUES (
@@ -74,6 +84,8 @@ module.exports = async function (context, req) {
             )
         `;
 
+        context.log('Email inserted successfully');
+        
         context.res = {
             status: 200,
             headers: headers,
@@ -84,17 +96,24 @@ module.exports = async function (context, req) {
         };
 
     } catch (error) {
-        context.log.error('Error:', error);
+        context.log.error('Error occurred:', error.message);
+        context.log.error('Stack:', error.stack);
         
         context.res = {
             status: 500,
             headers: headers,
             body: { 
                 success: false, 
-                message: 'An error occurred. Please try again later.' 
+                message: 'An error occurred. Please try again later.',
+                error: process.env.NODE_ENV === 'development' ? error.message : undefined
             }
         };
     } finally {
-        await sql.close();
+        try {
+            await sql.close();
+            context.log('Database connection closed');
+        } catch (err) {
+            context.log.error('Error closing connection:', err);
+        }
     }
 };
