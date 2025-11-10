@@ -6,7 +6,7 @@
       "direction": "in",
       "name": "req",
       "methods": ["post", "options"],
-      "route": "waitlist"
+      "route": "HttpTrigger1"
     },
     {
       "type": "http",
