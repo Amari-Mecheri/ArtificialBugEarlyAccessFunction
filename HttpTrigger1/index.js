@@ -1,17 +1,26 @@
+// index.js - VERSION FINALE AVEC SQL
 const sql = require('mssql');
 
 const config = {
     user: process.env.SQL_USER,
     password: process.env.SQL_PASSWORD,
-    server: process.env.SQL_SERVER, // ex: yourserver.database.windows.net
+    server: process.env.SQL_SERVER,
     database: process.env.SQL_DATABASE,
     options: {
         encrypt: true,
-        trustServerCertificate: false
+        trustServerCertificate: false,
+        connectTimeout: 30000
+    },
+    pool: {
+        max: 10,
+        min: 0,
+        idleTimeoutMillis: 30000
     }
 };
 
 module.exports = async function (context, req) {
+    context.log('Function started');
+    
     // CORS headers
     const headers = {
         'Access-Control-Allow-Origin': '*',
@@ -20,7 +29,7 @@ module.exports = async function (context, req) {
         'Content-Type': 'application/json'
     };
 
-    // Handle preflight
+    // Handle OPTIONS
     if (req.method === 'OPTIONS') {
         context.res = {
             status: 200,
@@ -29,10 +38,12 @@ module.exports = async function (context, req) {
         return;
     }
 
+    let pool;
+    
     try {
         const email = req.body?.email;
-
-        // Validation
+        
+        // Validation email
         if (!email || !email.includes('@')) {
             context.res = {
                 status: 400,
@@ -42,15 +53,28 @@ module.exports = async function (context, req) {
             return;
         }
 
-        // Connect to database
-        await sql.connect(config);
+        context.log('Email received:', email);
+        
+        // Log config (sans mot de passe)
+        context.log('SQL Config:', {
+            user: config.user,
+            server: config.server,
+            database: config.database
+        });
 
-        // Check if email already exists
-        const checkResult = await sql.query`
-            SELECT COUNT(*) as count FROM Waitlist WHERE email = ${email}
-        `;
+        // Connexion à la base de données
+        context.log('Connecting to database...');
+        pool = await sql.connect(config);
+        context.log('Database connected successfully');
+
+        // Vérifier si l'email existe déjà
+        context.log('Checking if email exists...');
+        const checkResult = await pool.request()
+            .input('email', sql.NVarChar, email)
+            .query('SELECT COUNT(*) as count FROM Waitlist WHERE email = @email');
 
         if (checkResult.recordset[0].count > 0) {
+            context.log('Email already exists');
             context.res = {
                 status: 200,
                 headers: headers,
@@ -62,17 +86,19 @@ module.exports = async function (context, req) {
             return;
         }
 
-        // Insert new email
-        await sql.query`
-            INSERT INTO Waitlist (email, created_at, ip_address, user_agent)
-            VALUES (
-                ${email}, 
-                GETDATE(), 
-                ${req.headers['x-forwarded-for'] || req.headers['x-client-ip'] || 'unknown'},
-                ${req.headers['user-agent'] || 'unknown'}
-            )
-        `;
+        // Insérer le nouvel email
+        context.log('Inserting new email...');
+        const ip = req.headers['x-forwarded-for'] || req.headers['x-client-ip'] || 'unknown';
+        const userAgent = req.headers['user-agent'] || 'unknown';
+        
+        await pool.request()
+            .input('email', sql.NVarChar, email)
+            .input('ip', sql.NVarChar, ip)
+            .input('userAgent', sql.NVarChar, userAgent)
+            .query('INSERT INTO Waitlist (email, ip_address, user_agent) VALUES (@email, @ip, @userAgent)');
 
+        context.log('Email inserted successfully');
+        
         context.res = {
             status: 200,
             headers: headers,
@@ -83,17 +109,41 @@ module.exports = async function (context, req) {
         };
 
     } catch (error) {
-        context.log.error('Error:', error);
+        context.log.error('Error occurred:', error.message);
+        context.log.error('Error code:', error.code);
+        context.log.error('Stack:', error.stack);
+        
+        let errorMessage = 'An error occurred. Please try again later.';
+        
+        // Messages d'erreur plus précis
+        if (error.code === 'ELOGIN') {
+            errorMessage = 'Database authentication failed';
+        } else if (error.code === 'ETIMEOUT') {
+            errorMessage = 'Database connection timeout';
+        } else if (error.code === 'EREQUEST') {
+            errorMessage = 'Database query error';
+        }
         
         context.res = {
             status: 500,
             headers: headers,
             body: { 
                 success: false, 
-                message: 'An error occurred. Please try again later.' 
+                message: errorMessage,
+                debug: {
+                    error: error.message,
+                    code: error.code
+                }
             }
         };
     } finally {
-        await sql.close();
+        if (pool) {
+            try {
+                await pool.close();
+                context.log('Database connection closed');
+            } catch (err) {
+                context.log.error('Error closing connection:', err.message);
+            }
+        }
     }
 };
