@@ -1,22 +1,48 @@
 const sql = require('mssql');
 
-
-
-
-
 const config = {
     user: process.env.SQL_USER,
     password: process.env.SQL_PASSWORD,
-    server: process.env.SQL_SERVER, // ex: yourserver.database.windows.net
+    server: process.env.SQL_SERVER,
     database: process.env.SQL_DATABASE,
     options: {
         encrypt: true,
         trustServerCertificate: false
+    },
+    // CRITICAL: Augmenter les timeouts pour le réveil de la DB
+    connectionTimeout: 60000, // 60 secondes au lieu de 15s par défaut
+    requestTimeout: 60000,     // 60 secondes pour les requêtes
+    pool: {
+        idleTimeoutMillis: 30000
     }
 };
 
+/**
+ * Tente de se connecter à la DB avec retry si elle est en pause
+ */
+async function connectWithRetry(maxRetries = 2, delayMs = 5000) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            await sql.connect(config);
+            return true;
+        } catch (error) {
+            // Si c'est un timeout et qu'il reste des tentatives
+            if (attempt < maxRetries && 
+                (error.code === 'ETIMEOUT' || 
+                 error.message.includes('timeout') ||
+                 error.message.includes('Failed to connect'))) {
+                
+                console.log(`Connection attempt ${attempt} failed, retrying in ${delayMs}ms...`);
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+                continue;
+            }
+            throw error; // Si dernière tentative ou erreur différente
+        }
+    }
+    return false;
+}
+
 module.exports = async function (context, req) {
-    // CORS headers
     const headers = {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -46,8 +72,12 @@ module.exports = async function (context, req) {
             return;
         }
 
-        // Connect to database
-        await sql.connect(config);
+        // Connect to database avec retry
+        const connected = await connectWithRetry();
+        
+        if (!connected) {
+            throw new Error('Could not connect to database after retries');
+        }
 
         // Check if email already exists
         const checkResult = await sql.query`
@@ -89,15 +119,27 @@ module.exports = async function (context, req) {
     } catch (error) {
         context.log.error('Error:', error);
 
+        // Message différent selon le type d'erreur
+        let userMessage = 'An error occurred. Please try again later.';
+        
+        if (error.code === 'ETIMEOUT' || error.message.includes('timeout')) {
+            userMessage = 'Database is waking up. Please try again in 30 seconds.';
+        }
+
         context.res = {
             status: 500,
             headers: headers,
             body: { 
                 success: false, 
-                message: 'An error occurred. Please try again later.' 
+                message: userMessage,
+                error: process.env.NODE_ENV === 'development' ? error.message : undefined
             }
         };
     } finally {
-        await sql.close();
+        try {
+            await sql.close();
+        } catch (closeError) {
+            context.log.error('Error closing connection:', closeError);
+        }
     }
-};
+}; 
