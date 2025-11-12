@@ -1,4 +1,3 @@
-const sql = require('mssql');
 
 const config = {
     user: process.env.SQL_USER,
@@ -24,7 +23,7 @@ const config = {
  * Tente de se connecter à la DB avec retry si elle est en pause.
  * Elle crée un nouveau pool de connexion par invocation.
  */
-async function connectWithRetry(maxRetries = 2, delayMs = 5000) {
+async function connectWithRetry(sql, maxRetries = 2, delayMs = 5000) {
     let pool;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
@@ -82,9 +81,11 @@ module.exports = async function (context, req) {
             };
             return; // 🛑 Sortie rapide SANS connexion DB
         }
+        
+        const sql = require('mssql');
 
         // Connecter au pool SEULEMENT si l'e-mail est valide
-        pool = await connectWithRetry(); 
+        pool = await connectWithRetry(sql); 
 
         // Check if email already exists
         const checkResult = await pool.request().query`
