@@ -10,15 +10,19 @@ const config = {
         trustServerCertificate: false
     },
     // CRITICAL: Augmenter les timeouts pour le réveil de la DB
-    connectionTimeout: 120000, // 120 secondes pour la connexion
-    requestTimeout: 120000,    // 120 secondes pour les requêtes
+    connectionTimeout: 120000, 
+    requestTimeout: 120000,    
+    
+    // NOUVEAU: Configuration agressive du Pool pour forcer la fermeture rapide
+    pool: {
+        // Conserver les connexions inactives pendant seulement 5 secondes
+        idleTimeoutMillis: 5000 
+    }
 };
 
 /**
  * Tente de se connecter à la DB avec retry si elle est en pause.
  * Elle crée un nouveau pool de connexion par invocation.
- * @returns {sql.ConnectionPool} Le pool de connexion actif.
- * @throws {Error} Si la connexion échoue après toutes les tentatives.
  */
 async function connectWithRetry(maxRetries = 2, delayMs = 5000) {
     let pool;
@@ -29,33 +33,30 @@ async function connectWithRetry(maxRetries = 2, delayMs = 5000) {
             await pool.connect();
             return pool; // Retourne le pool connecté
         } catch (error) {
-            // Si c'est un timeout ou une erreur de connexion et qu'il reste des tentatives
+            // Logique de retry et de fermeture de pool en cas d'échec
             if (attempt < maxRetries &&
                 (error.code === 'ETIMEOUT' ||
                     error.message.includes('timeout') ||
                     error.message.includes('Failed to connect'))) {
 
                 console.log(`Connection attempt ${attempt} failed, retrying in ${delayMs}ms...`);
-                // Fermer le pool en échec avant de réessayer
                 if (pool) {
                     await pool.close().catch(e => console.error("Error closing pool on retry failure:", e.message));
                 }
                 await new Promise(resolve => setTimeout(resolve, delayMs));
                 continue;
             }
-            // Si c'est la dernière tentative ou une erreur différente, fermer et propager
             if (pool) {
                 await pool.close().catch(e => console.error("Error closing pool on final failure:", e.message));
             }
             throw error;
         }
     }
-    // Cette partie ne devrait pas être atteinte
     throw new Error('Could not connect to database after all retries');
 }
 
 module.exports = async function (context, req) {
-    let pool = null; // Variable pour stocker le pool de connexion
+    let pool = null; 
     
     const headers = {
         'Access-Control-Allow-Origin': '*',
@@ -64,12 +65,8 @@ module.exports = async function (context, req) {
         'Content-Type': 'application/json'
     };
 
-    // Handle preflight
     if (req.method === 'OPTIONS') {
-        context.res = {
-            status: 200,
-            headers: headers
-        };
+        context.res = { status: 200, headers: headers };
         return;
     }
 
@@ -79,15 +76,15 @@ module.exports = async function (context, req) {
         // Validation (point de sortie du Warmup Léger)
         if (!email || !email.includes('@')) {
             context.res = {
-                status: 400, // Statut attendu par keepAlive pour le succès du Light Warmup
+                status: 400, // Statut attendu par keepAlive
                 headers: headers,
                 body: { success: false, message: 'Invalid email address' }
             };
             return; // 🛑 Sortie rapide SANS connexion DB
         }
 
-        // Connect to database avec retry (SEULEMENT si l'e-mail est valide)
-        pool = await connectWithRetry();
+        // Connecter au pool SEULEMENT si l'e-mail est valide
+        pool = await connectWithRetry(); 
 
         // Check if email already exists
         const checkResult = await pool.request().query`
@@ -129,7 +126,6 @@ module.exports = async function (context, req) {
     } catch (error) {
         context.log.error('Error:', error);
 
-        // Message différent selon le type d'erreur
         let userMessage = 'An error occurred. Please try again later.';
 
         if (error.code === 'ETIMEOUT' || error.message.includes('timeout') || error.message.includes('Failed to connect')) {
@@ -146,7 +142,7 @@ module.exports = async function (context, req) {
             }
         };
     } finally {
-        // ⚠️ FERMETURE CRITIQUE : Assurer la fermeture du pool pour libérer les vCore.
+        // ⚠️ FERMETURE CRITIQUE : Assurer la fermeture du pool
         if (pool) {
             try {
                 await pool.close();
