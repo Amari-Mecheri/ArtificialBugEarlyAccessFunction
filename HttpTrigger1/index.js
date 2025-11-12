@@ -12,9 +12,6 @@ const config = {
     // CRITICAL: Augmenter les timeouts pour le réveil de la DB
     connectionTimeout: 120000, // 60 secondes au lieu de 15s par défaut
     requestTimeout: 120000,     // 60 secondes pour les requêtes
-    pool: {
-        idleTimeoutMillis: 30000
-    }
 };
 
 /**
