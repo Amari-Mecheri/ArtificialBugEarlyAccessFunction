@@ -27,11 +27,11 @@ async function connectWithRetry(maxRetries = 2, delayMs = 5000) {
             return true;
         } catch (error) {
             // Si c'est un timeout et qu'il reste des tentatives
-            if (attempt < maxRetries && 
-                (error.code === 'ETIMEOUT' || 
-                 error.message.includes('timeout') ||
-                 error.message.includes('Failed to connect'))) {
-                
+            if (attempt < maxRetries &&
+                (error.code === 'ETIMEOUT' ||
+                    error.message.includes('timeout') ||
+                    error.message.includes('Failed to connect'))) {
+
                 console.log(`Connection attempt ${attempt} failed, retrying in ${delayMs}ms...`);
                 await new Promise(resolve => setTimeout(resolve, delayMs));
                 continue;
@@ -74,23 +74,23 @@ module.exports = async function (context, req) {
 
         // Connect to database avec retry
         const connected = await connectWithRetry();
-        
+
         if (!connected) {
             throw new Error('Could not connect to database after retries');
         }
 
         // Check if email already exists
         const checkResult = await sql.query`
-            SELECT COUNT(*) as count FROM Waitlist WHERE email = ${email}
+            SELECT 1 FROM Waitlist WHERE email = ${email}
         `;
 
-        if (checkResult.recordset[0].count > 0) {
+        if (checkResult.recordset.length > 0) {
             context.res = {
                 status: 200,
                 headers: headers,
-                body: { 
-                    success: true, 
-                    message: 'You are already on the waitlist!' 
+                body: {
+                    success: true,
+                    message: 'You are already on the waitlist!'
                 }
             };
             return;
@@ -110,9 +110,9 @@ module.exports = async function (context, req) {
         context.res = {
             status: 200,
             headers: headers,
-            body: { 
-                success: true, 
-                message: '🎉 Thank you! You\'re on the waitlist. We\'ll be in touch soon.' 
+            body: {
+                success: true,
+                message: '🎉 Thank you! You\'re on the waitlist. We\'ll be in touch soon.'
             }
         };
 
@@ -121,7 +121,7 @@ module.exports = async function (context, req) {
 
         // Message différent selon le type d'erreur
         let userMessage = 'An error occurred. Please try again later.';
-        
+
         if (error.code === 'ETIMEOUT' || error.message.includes('timeout')) {
             userMessage = 'Database is waking up. Please try again in 30 seconds.';
         }
@@ -129,8 +129,8 @@ module.exports = async function (context, req) {
         context.res = {
             status: 500,
             headers: headers,
-            body: { 
-                success: false, 
+            body: {
+                success: false,
                 message: userMessage,
                 error: process.env.NODE_ENV === 'development' ? error.message : undefined
             }
