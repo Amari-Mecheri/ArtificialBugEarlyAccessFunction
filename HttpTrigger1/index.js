@@ -10,36 +10,53 @@ const config = {
         trustServerCertificate: false
     },
     // CRITICAL: Augmenter les timeouts pour le réveil de la DB
-    connectionTimeout: 120000, // 60 secondes au lieu de 15s par défaut
-    requestTimeout: 120000,     // 60 secondes pour les requêtes
+    connectionTimeout: 120000, // 120 secondes pour la connexion
+    requestTimeout: 120000,    // 120 secondes pour les requêtes
 };
 
 /**
- * Tente de se connecter à la DB avec retry si elle est en pause
+ * Tente de se connecter à la DB avec retry si elle est en pause.
+ * Elle crée un nouveau pool de connexion par invocation.
+ * @returns {sql.ConnectionPool} Le pool de connexion actif.
+ * @throws {Error} Si la connexion échoue après toutes les tentatives.
  */
 async function connectWithRetry(maxRetries = 2, delayMs = 5000) {
+    let pool;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            await sql.connect(config);
-            return true;
+            // CRÉER ET CONNECTER UN NOUVEAU POOL pour cette invocation
+            pool = new sql.ConnectionPool(config);
+            await pool.connect();
+            return pool; // Retourne le pool connecté
         } catch (error) {
-            // Si c'est un timeout et qu'il reste des tentatives
+            // Si c'est un timeout ou une erreur de connexion et qu'il reste des tentatives
             if (attempt < maxRetries &&
                 (error.code === 'ETIMEOUT' ||
                     error.message.includes('timeout') ||
                     error.message.includes('Failed to connect'))) {
 
                 console.log(`Connection attempt ${attempt} failed, retrying in ${delayMs}ms...`);
+                // Fermer le pool en échec avant de réessayer
+                if (pool) {
+                    await pool.close().catch(e => console.error("Error closing pool on retry failure:", e.message));
+                }
                 await new Promise(resolve => setTimeout(resolve, delayMs));
                 continue;
             }
-            throw error; // Si dernière tentative ou erreur différente
+            // Si c'est la dernière tentative ou une erreur différente, fermer et propager
+            if (pool) {
+                await pool.close().catch(e => console.error("Error closing pool on final failure:", e.message));
+            }
+            throw error;
         }
     }
-    return false;
+    // Cette partie ne devrait pas être atteinte
+    throw new Error('Could not connect to database after all retries');
 }
 
 module.exports = async function (context, req) {
+    let pool = null; // Variable pour stocker le pool de connexion
+    
     const headers = {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -59,25 +76,21 @@ module.exports = async function (context, req) {
     try {
         const email = req.body?.email;
 
-        // Validation
+        // Validation (point de sortie du Warmup Léger)
         if (!email || !email.includes('@')) {
             context.res = {
-                status: 400,
+                status: 400, // Statut attendu par keepAlive pour le succès du Light Warmup
                 headers: headers,
                 body: { success: false, message: 'Invalid email address' }
             };
-            return;
+            return; // 🛑 Sortie rapide SANS connexion DB
         }
 
-        // Connect to database avec retry
-        const connected = await connectWithRetry();
-
-        if (!connected) {
-            throw new Error('Could not connect to database after retries');
-        }
+        // Connect to database avec retry (SEULEMENT si l'e-mail est valide)
+        pool = await connectWithRetry();
 
         // Check if email already exists
-        const checkResult = await sql.query`
+        const checkResult = await pool.request().query`
             SELECT 1 FROM Waitlist WHERE email = ${email}
         `;
 
@@ -94,7 +107,7 @@ module.exports = async function (context, req) {
         }
 
         // Insert new email
-        await sql.query`
+        await pool.request().query`
             INSERT INTO Waitlist (email, created_at, ip_address, user_agent)
             VALUES (
                 ${email}, 
@@ -119,7 +132,7 @@ module.exports = async function (context, req) {
         // Message différent selon le type d'erreur
         let userMessage = 'An error occurred. Please try again later.';
 
-        if (error.code === 'ETIMEOUT' || error.message.includes('timeout')) {
+        if (error.code === 'ETIMEOUT' || error.message.includes('timeout') || error.message.includes('Failed to connect')) {
             userMessage = 'Database is waking up. Please try again in 30 seconds.';
         }
 
@@ -133,10 +146,13 @@ module.exports = async function (context, req) {
             }
         };
     } finally {
-        try {
-            await sql.close();
-        } catch (closeError) {
-            context.log.error('Error closing connection:', closeError);
+        // ⚠️ FERMETURE CRITIQUE : Assurer la fermeture du pool pour libérer les vCore.
+        if (pool) {
+            try {
+                await pool.close();
+            } catch (closeError) {
+                context.log.error('Error closing connection pool:', closeError.message);
+            }
         }
     }
-}; 
+};
