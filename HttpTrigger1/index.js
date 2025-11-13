@@ -72,7 +72,7 @@ module.exports = async function (context, req) {
     };
 
   } catch (error) {
-    context.log.error('Error:', error);
+    context.error('Error:', error);
     context.res = {
       status: 500,
       headers,
