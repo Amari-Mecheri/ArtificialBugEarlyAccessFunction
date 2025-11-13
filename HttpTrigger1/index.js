@@ -1,15 +1,12 @@
-const { TableClient, AzureNamedKeyCredential } = require("@azure/data-tables");
+const { TableClient, TableServiceClient, AzureNamedKeyCredential } = require("@azure/data-tables");
 
 const account = process.env.AZURE_STORAGE_ACCOUNT;
 const accountKey = process.env.AZURE_STORAGE_KEY;
 const tableName = "waitList";
 
 const credential = new AzureNamedKeyCredential(account, accountKey);
-const client = new TableClient(
-  `https://${account}.table.cosmos.azure.com`,
-  tableName,
-  credential
-);
+const serviceClient = new TableServiceClient(`https://${account}.table.cosmos.azure.com`, credential);
+const client = new TableClient(`https://${account}.table.cosmos.azure.com`, tableName, credential);
 
 module.exports = async function (context, req) {
   const headers = {
@@ -25,42 +22,38 @@ module.exports = async function (context, req) {
   }
 
   try {
-    const email = req.body?.email;
+    // 👇 Create the table if it doesn't exist
+    try {
+      await serviceClient.createTable(tableName);
+      context.log(`Table '${tableName}' created.`);
+    } catch (err) {
+      if (err.statusCode !== 409) throw err; // ignore "table already exists"
+    }
 
-    // Email validation
+    const email = req.body?.email;
     if (!email || !email.includes('@')) {
-      context.res = {
-        status: 400,
-        headers,
-        body: { success: false, message: 'Invalid email address' }
-      };
+      context.res = { status: 400, headers, body: { success: false, message: 'Invalid email address' } };
       return;
     }
 
     const partitionKey = "waitlist";
     const rowKey = email.toLowerCase();
 
-    // Check if email already exists
     try {
       await client.getEntity(partitionKey, rowKey);
-      context.res = {
-        status: 200,
-        headers,
-        body: { success: true, message: 'You are already on the waitlist!' }
-      };
+      context.res = { status: 200, headers, body: { success: true, message: 'You are already on the waitlist!' } };
       return;
     } catch (err) {
-      if (err.statusCode !== 404) throw err; // Error other than "not found"
+      if (err.statusCode !== 404) throw err;
     }
 
-    // Add new email to the waitlist
     const entity = {
       partitionKey,
       rowKey,
       createdAt: new Date().toISOString(),
       ipAddress: req.headers['x-forwarded-for'] || req.headers['x-client-ip'] || 'unknown',
       userAgent: req.headers['user-agent'] || 'unknown',
-      status: 'pending' // initial status
+      status: 'pending'
     };
 
     await client.createEntity(entity);
@@ -70,13 +63,8 @@ module.exports = async function (context, req) {
       headers,
       body: { success: true, message: '🎉 Thank you! You\'re on the waitlist. We\'ll be in touch soon.' }
     };
-
   } catch (error) {
     context.log.error('Error:', error);
-    context.res = {
-      status: 500,
-      headers,
-      body: { success: false, message: 'An error occurred. Please try again later.' }
-    };
+    context.res = { status: 500, headers, body: { success: false, message: 'An error occurred. Please try again later.' } };
   }
 };
