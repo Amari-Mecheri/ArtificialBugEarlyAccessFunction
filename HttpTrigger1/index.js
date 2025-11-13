@@ -1,9 +1,9 @@
 const { CosmosClient } = require("@azure/cosmos");
 
-const endpoint = process.env.COSMOS_ENDPOINT; // ex: https://artificialbugcosmosdb.documents.azure.com:443/
-const key = process.env.COSMOS_KEY;           // Primary key
-const databaseId = "ArtificialBugDB";          // à créer dans Cosmos DB
-const containerId = "waitList";                // container / table
+const endpoint = process.env.COSMOS_ENDPOINT;
+const key = process.env.COSMOS_KEY;
+const databaseId = "ArtificialBugDB";
+const containerId = "waitList";
 
 const client = new CosmosClient({ endpoint, key });
 const database = client.database(databaseId);
@@ -35,10 +35,9 @@ module.exports = async function (context, req) {
       return;
     }
 
-    const id = email.toLowerCase(); // id unique du document
-    const partitionKey = "waitlist"; // clé de partition fixe, ou tu peux la baser sur email si gros volume
+    const id = email.toLowerCase();
+    const partitionKey = "waitlist";
 
-    // Vérifier si l'email existe déjà
     try {
       const { resource } = await container.item(id, partitionKey).read();
       if (resource) {
@@ -50,12 +49,11 @@ module.exports = async function (context, req) {
         return;
       }
     } catch (err) {
-      if (err.code !== 404) throw err; // erreur autre que "not found"
+      if (err.code !== 404) throw err;
     }
 
-    // Ajouter le nouvel email
     const entity = {
-      id, // id unique
+      id,
       partitionKey,
       createdAt: new Date().toISOString(),
       ipAddress: req.headers['x-forwarded-for'] || req.headers['x-client-ip'] || 'unknown',
