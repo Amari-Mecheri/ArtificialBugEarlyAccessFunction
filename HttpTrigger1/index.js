@@ -59,7 +59,8 @@ module.exports = async function (context, req) {
       rowKey,
       createdAt: new Date().toISOString(),
       ipAddress: req.headers['x-forwarded-for'] || req.headers['x-client-ip'] || 'unknown',
-      userAgent: req.headers['user-agent'] || 'unknown'
+      userAgent: req.headers['user-agent'] || 'unknown',
+      status: 'pending' // initial status
     };
 
     await client.createEntity(entity);
