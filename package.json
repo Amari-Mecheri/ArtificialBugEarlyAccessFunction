@@ -7,7 +7,7 @@
     "test": "echo \"No tests yet\""
   },
   "dependencies": {
-    "@azure/data-tables": "^13.0.0"
+    "@azure/cosmos": "^4.0.0"
   },
   "devDependencies": {
     "@azure/functions": "^4.0.0"

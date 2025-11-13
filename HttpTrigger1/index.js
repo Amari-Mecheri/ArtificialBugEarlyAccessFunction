@@ -1,12 +1,13 @@
-const { TableClient, TableServiceClient, AzureNamedKeyCredential } = require("@azure/data-tables");
+const { CosmosClient } = require("@azure/cosmos");
 
-const account = process.env.AZURE_STORAGE_ACCOUNT;
-const accountKey = process.env.AZURE_STORAGE_KEY;
-const tableName = "waitList";
+const endpoint = process.env.COSMOS_ENDPOINT; // ex: https://artificialbugcosmosdb.documents.azure.com:443/
+const key = process.env.COSMOS_KEY;           // Primary key
+const databaseId = "ArtificialBugDB";          // à créer dans Cosmos DB
+const containerId = "waitList";                // container / table
 
-const credential = new AzureNamedKeyCredential(account, accountKey);
-const serviceClient = new TableServiceClient(`https://${account}.table.cosmos.azure.com`, credential);
-const client = new TableClient(`https://${account}.table.cosmos.azure.com`, tableName, credential);
+const client = new CosmosClient({ endpoint, key });
+const database = client.database(databaseId);
+const container = database.container(containerId);
 
 module.exports = async function (context, req) {
   const headers = {
@@ -22,49 +23,60 @@ module.exports = async function (context, req) {
   }
 
   try {
-    // 👇 Create the table if it doesn't exist
-    try {
-      await serviceClient.createTable(tableName);
-      context.log(`Table '${tableName}' created.`);
-    } catch (err) {
-      if (err.statusCode !== 409) throw err; // ignore "table already exists"
-    }
-
     const email = req.body?.email;
+
+    // Email validation
     if (!email || !email.includes('@')) {
-      context.res = { status: 400, headers, body: { success: false, message: 'Invalid email address' } };
+      context.res = {
+        status: 400,
+        headers,
+        body: { success: false, message: 'Invalid email address' }
+      };
       return;
     }
 
-    const partitionKey = "waitlist";
-    const rowKey = email.toLowerCase();
+    const id = email.toLowerCase(); // id unique du document
+    const partitionKey = "waitlist"; // clé de partition fixe, ou tu peux la baser sur email si gros volume
 
+    // Vérifier si l'email existe déjà
     try {
-      await client.getEntity(partitionKey, rowKey);
-      context.res = { status: 200, headers, body: { success: true, message: 'You are already on the waitlist!' } };
-      return;
+      const { resource } = await container.item(id, partitionKey).read();
+      if (resource) {
+        context.res = {
+          status: 200,
+          headers,
+          body: { success: true, message: 'You are already on the waitlist!' }
+        };
+        return;
+      }
     } catch (err) {
-      if (err.statusCode !== 404) throw err;
+      if (err.code !== 404) throw err; // erreur autre que "not found"
     }
 
+    // Ajouter le nouvel email
     const entity = {
+      id, // id unique
       partitionKey,
-      rowKey,
       createdAt: new Date().toISOString(),
       ipAddress: req.headers['x-forwarded-for'] || req.headers['x-client-ip'] || 'unknown',
       userAgent: req.headers['user-agent'] || 'unknown',
       status: 'pending'
     };
 
-    await client.createEntity(entity);
+    await container.items.create(entity);
 
     context.res = {
       status: 200,
       headers,
       body: { success: true, message: '🎉 Thank you! You\'re on the waitlist. We\'ll be in touch soon.' }
     };
+
   } catch (error) {
     context.log.error('Error:', error);
-    context.res = { status: 500, headers, body: { success: false, message: 'An error occurred. Please try again later.' } };
+    context.res = {
+      status: 500,
+      headers,
+      body: { success: false, message: 'An error occurred. Please try again later.' }
+    };
   }
 };
