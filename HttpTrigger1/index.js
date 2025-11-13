@@ -6,7 +6,7 @@ const tableName = "waitList";
 
 const credential = new AzureNamedKeyCredential(account, accountKey);
 const client = new TableClient(
-  `https://${account}.table.core.windows.net`,
+  `https://${account}.table.cosmos.azure.com`,
   tableName,
   credential
 );
