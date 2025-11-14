@@ -1,4 +1,5 @@
 const { CosmosClient } = require("@azure/cosmos");
+const { v4: uuidv4 } = require('uuid');
 
 const endpoint = process.env.COSMOS_ENDPOINT;
 const key = process.env.COSMOS_KEY;
@@ -25,7 +26,6 @@ module.exports = async function (context, req) {
   try {
     const email = req.body?.email;
 
-    // Email validation
     if (!email || !email.includes('@')) {
       context.res = {
         status: 400,
@@ -35,26 +35,29 @@ module.exports = async function (context, req) {
       return;
     }
 
-    const id = email.toLowerCase();
     const partitionKey = "waitlist";
 
-    try {
-      const { resource } = await container.item(id, partitionKey).read();
-      if (resource) {
-        context.res = {
-          status: 200,
-          headers,
-          body: { success: true, message: 'You are already on the waitlist!' }
-        };
-        return;
-      }
-    } catch (err) {
-      if (err.code !== 404) throw err;
+    const querySpec = {
+      query: "SELECT VALUE COUNT(1) FROM c WHERE c.email = @email",
+      parameters: [{ name: "@email", value: email }]
+    };
+
+    const { resources: counts } = await container.items.query(querySpec, { partitionKey }).fetchAll();
+    const count = counts[0] || 0;
+
+    if (count > 0) {
+      context.res = {
+        status: 200,
+        headers,
+        body: { success: true, message: 'You are already on the waitlist!' }
+      };
+      return;
     }
 
     const entity = {
-      id,
+      id: uuidv4(),
       partitionKey,
+      email,
       createdAt: new Date().toISOString(),
       ipAddress: req.headers['x-forwarded-for'] || req.headers['x-client-ip'] || 'unknown',
       userAgent: req.headers['user-agent'] || 'unknown',
