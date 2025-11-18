@@ -9,7 +9,11 @@
     },
     "logLevel": {
       "default": "Warning",
-      "Function": "Warning"
+      "Function": "Warning",
+      "Host.Monitor": "Warning",
+      "Host.Aggregator": "Warning",
+      "Host.Triggers": "Warning",
+      "Host.Executors": "Warning"
     }
   },
   "extensionBundle": {
